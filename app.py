@@ -243,6 +243,21 @@ app = Flask(__name__)
 def hello():
     return "Hello, MTN RAN Risk Platform is live!"
 
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        # Vérification du token
+        verify_token = "TON_TOKEN_SECRET"
+        if request.args.get("hub.verify_token") == verify_token:
+            return request.args.get("hub.challenge")
+        return "Token invalide", 403
+
+    elif request.method == "POST":
+        data = request.get_json()
+        print("Message reçu:", data)
+        return "EVENT_RECEIVED", 200
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)

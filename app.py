@@ -43,9 +43,9 @@ client = Groq(api_key=GROQ_KEY)
 
 def analyser_risque(message, expediteur):
     projet = "RAN"
-    if message.startswith("[FIBRE]"):    projet = "FIBRE"
-    elif message.startswith("[5G]"):     projet = "5G"
-    elif message.startswith("[MMONEY]"): projet = "MMONEY"
+    if message.startswith("[FIBRE]"):     projet = "FIBRE"
+    elif message.startswith("[5G]"):      projet = "5G"
+    elif message.startswith("[MMONEY]"):  projet = "MMONEY"
 
     prompt = f"""Tu es un assistant expert en gestion des risques pour MTN Côte d'Ivoire.
 Un technicien terrain vient d'envoyer ce message WhatsApp : "{message}"
@@ -85,10 +85,17 @@ def envoyer_whatsapp(numero, message):
         "type": "text",
         "text": {"body": message}
     }
-    requests.post(url, headers=headers, json=data)
+    resp = requests.post(url, headers=headers, json=data)
+    print(f"==> WhatsApp envoi à {numero} : {resp.status_code} — {resp.text}")
 
 
 def sauvegarder_airtable(risque, expediteur, message_original):
+    """
+    Colonnes Airtable (noms exacts vus sur la capture) :
+    Date, Technici... (Technicien), Projet, Site,
+    Message_original, Type, Severite, Description,
+    Action, Attachments, Bloque, Statut
+    """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE}/Risques"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_KEY}",
@@ -97,17 +104,19 @@ def sauvegarder_airtable(risque, expediteur, message_original):
     data = {"fields": {
         "Date"             : datetime.now().isoformat(),
         "Technicien"       : expediteur,
-        "Message_original" : message_original,
         "Projet"           : risque.get("projet", "RAN"),
+        "Site"             : risque["site_concerne"],
+        "Message_original" : message_original,
         "Type"             : risque["type_risque"],
         "Severite"         : risque["severite"],
-        "Site"             : risque["site_concerne"],
         "Description"      : risque["description"],
         "Action"           : risque["action_immediate"],
         "Bloque"           : risque["bloquer_projet"],
         "Statut"           : "OUVERT"
+        # "Attachments" est géré séparément (photos envoyées par WhatsApp)
     }}
-    requests.post(url, headers=headers, json=data)
+    resp = requests.post(url, headers=headers, json=data)
+    print(f"==> Airtable sauvegarde : {resp.status_code} — {resp.text}")
 
 
 def recuperer_risques_airtable(jours=7):
@@ -163,40 +172,70 @@ def verify():
 @app.route("/webhook", methods=["POST"])
 def recevoir_message():
     data = request.json
+    print(f"=== MESSAGE RECU ===")
+    print(json.dumps(data, indent=2, ensure_ascii=False))
     try:
-        msg = data["entry"][0]["changes"][0]["value"]
-        if "messages" in msg:
-            message    = msg["messages"][0]["text"]["body"]
-            expediteur = msg["messages"][0]["from"]
+        entry = data.get("entry", [])
+        print(f"==> Entry trouvé : {len(entry)} élément(s)")
 
-            envoyer_whatsapp(expediteur, "Risque reçu. Analyse en cours... Merci.")
+        if not entry:
+            print("==> ERREUR : Pas d'entry dans le message")
+            return jsonify({"status": "ok"})
 
-            risque = analyser_risque(message, expediteur)
+        changes = entry[0].get("changes", [])
+        print(f"==> Changes trouvés : {len(changes)} élément(s)")
 
-            confirmation = (
-                f"Risque enregistré :\n"
-                f"Projet   : {risque.get('projet', 'RAN')}\n"
-                f"Type     : {risque['type_risque']}\n"
-                f"Sévérité : {risque['severite']}\n"
+        if not changes:
+            print("==> ERREUR : Pas de changes")
+            return jsonify({"status": "ok"})
+
+        value = changes[0].get("value", {})
+        print(f"==> Value reçue : {value}")
+
+        if "messages" not in value:
+            print("==> INFO : Pas de messages (webhook de statut ignoré)")
+            return jsonify({"status": "ok"})
+
+        message    = value["messages"][0]["text"]["body"]
+        expediteur = value["messages"][0]["from"]
+        print(f"==> Message : {message}")
+        print(f"==> Expéditeur : {expediteur}")
+
+        # 1. Accusé de réception
+        envoyer_whatsapp(expediteur, "Risque reçu. Analyse en cours... Merci.")
+
+        # 2. Analyse IA
+        risque = analyser_risque(message, expediteur)
+        print(f"==> Risque analysé : {risque}")
+
+        # 3. Confirmation au technicien
+        confirmation = (
+            f"Risque enregistré :\n"
+            f"Projet   : {risque.get('projet', 'RAN')}\n"
+            f"Type     : {risque['type_risque']}\n"
+            f"Sévérité : {risque['severite']}\n"
+            f"Site     : {risque['site_concerne']}\n"
+            f"Votre responsable a été alerté."
+        )
+        envoyer_whatsapp(expediteur, confirmation)
+
+        # 4. Alertes managers
+        destinataires = ESCALADE.get(risque["severite"], [])
+        if destinataires:
+            alerte = (
+                f"ALERTE RISQUE {risque['severite']} — {risque.get('projet','RAN')}\n"
                 f"Site     : {risque['site_concerne']}\n"
-                f"Votre responsable a été alerté."
+                f"Signalé  : {expediteur}\n"
+                f"Problème : {risque['description']}\n"
+                f"Action   : {risque['action_immediate']}\n"
+                f"Bloque   : {'OUI' if risque['bloquer_projet'] else 'NON'}"
             )
-            envoyer_whatsapp(expediteur, confirmation)
+            for role in destinataires:
+                envoyer_whatsapp(CONTACTS[role], alerte)
 
-            destinataires = ESCALADE.get(risque["severite"], [])
-            if destinataires:
-                alerte = (
-                    f"ALERTE RISQUE {risque['severite']} — {risque.get('projet','RAN')}\n"
-                    f"Site     : {risque['site_concerne']}\n"
-                    f"Signalé  : {expediteur}\n"
-                    f"Problème : {risque['description']}\n"
-                    f"Action   : {risque['action_immediate']}\n"
-                    f"Bloque   : {'OUI' if risque['bloquer_projet'] else 'NON'}"
-                )
-                for role in destinataires:
-                    envoyer_whatsapp(CONTACTS[role], alerte)
-
-            sauvegarder_airtable(risque, expediteur, message)
+        # 5. Sauvegarde Airtable
+        sauvegarder_airtable(risque, expediteur, message)
+        print("=== TRAITEMENT TERMINÉ AVEC SUCCÈS ===")
 
     except Exception as e:
         import traceback

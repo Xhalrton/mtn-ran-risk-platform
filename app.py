@@ -199,7 +199,9 @@ def recevoir_message():
             sauvegarder_airtable(risque, expediteur, message)
 
     except Exception as e:
-        print(f"Erreur : {e}")
+        import traceback
+        print(f"ERREUR COMPLETE : {e}")
+        print(traceback.format_exc())
 
     return jsonify({"status": "ok"})
 

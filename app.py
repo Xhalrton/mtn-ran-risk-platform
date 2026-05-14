@@ -32,6 +32,14 @@ ESCALADE = {
     "CRITIQUE" : ["CHEF_PROJET", "PMO", "DIRECTEUR"]
 }
 
+# Valeurs exactes des champs Single Select Airtable
+TYPES_RISQUE_VALIDES = [
+    "ACCES", "SECURITE", "TECHNIQUE", "ADMINISTRATIF",
+    "METEO", "LOGISTIQUE", "SANITAIRE", "SOCIAL", "AUTRES"
+]
+
+SEVERITES_VALIDES = ["CRITIQUE", "ELEVE", "MOYEN", "FAIBLE"]
+
 # ============================================
 # CLIENT GROQ (LLAMA DE META)
 # ============================================
@@ -55,7 +63,7 @@ Projet concerné : {projet}
 Analyse ce message et réponds UNIQUEMENT en JSON valide avec cette structure exacte :
 {{
   "projet": "{projet}",
-  "type_risque": "ACCES|SECURITE|TECHNIQUE|ADMINISTRATIF|METEO|AUTRE",
+  "type_risque": "ACCES|SECURITE|TECHNIQUE|ADMINISTRATIF|METEO|LOGISTIQUE|SANITAIRE|SOCIAL|AUTRES",
   "severite": "CRITIQUE|ELEVE|MOYEN|FAIBLE",
   "site_concerne": "nom du site ou INCONNU",
   "description": "résumé clair en 1 phrase",
@@ -70,7 +78,15 @@ Ne mets rien d'autre que le JSON dans ta réponse."""
         response_format={"type": "json_object"},
         max_tokens=500
     )
-    return json.loads(response.choices[0].message.content)
+    risque = json.loads(response.choices[0].message.content)
+
+    # Sécurité — forcer des valeurs valides si l'IA répond hors liste
+    if risque.get("type_risque") not in TYPES_RISQUE_VALIDES:
+        risque["type_risque"] = "AUTRES"
+    if risque.get("severite") not in SEVERITES_VALIDES:
+        risque["severite"] = "FAIBLE"
+
+    return risque
 
 
 def envoyer_whatsapp(numero, message):
@@ -90,12 +106,6 @@ def envoyer_whatsapp(numero, message):
 
 
 def sauvegarder_airtable(risque, expediteur, message_original):
-    """
-    Colonnes Airtable (noms exacts vus sur la capture) :
-    Date, Technici... (Technicien), Projet, Site,
-    Message_original, Type, Severite, Description,
-    Action, Attachments, Bloque, Statut
-    """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE}/Risques"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_KEY}",
@@ -107,13 +117,15 @@ def sauvegarder_airtable(risque, expediteur, message_original):
         "Projet"           : risque.get("projet", "RAN"),
         "Site"             : risque["site_concerne"],
         "Message_original" : message_original,
-        "Type"             : risque["type_risque"],
-        "Severite"         : risque["severite"],
+        "Type"             : risque["type_risque"],       # ACCES|SECURITE|TECHNIQUE|
+                                                           # ADMINISTRATIF|METEO|
+                                                           # LOGISTIQUE|SANITAIRE|
+                                                           # SOCIAL|AUTRES
+        "Severite"         : risque["severite"],          # CRITIQUE|ELEVE|MOYEN|FAIBLE
         "Description"      : risque["description"],
         "Action"           : risque["action_immediate"],
         "Bloque"           : risque["bloquer_projet"],
-        "Statut"           : "OUVERT"
-        # "Attachments" est géré séparément (photos envoyées par WhatsApp)
+        "Statut"           : "OPENED"                     # OPENED|ONGOING|CLOSED
     }}
     resp = requests.post(url, headers=headers, json=data)
     print(f"==> Airtable sauvegarde : {resp.status_code} — {resp.text}")

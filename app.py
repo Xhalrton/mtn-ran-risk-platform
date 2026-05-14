@@ -171,6 +171,7 @@ def verify():
 
 @app.route("/webhook", methods=["POST"])
 def recevoir_message():
+    print("WEBHOOK APPELE VERSION 2.0")
     data = request.json
     print(f"=== MESSAGE RECU ===")
     print(json.dumps(data, indent=2, ensure_ascii=False))

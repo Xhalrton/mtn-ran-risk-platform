@@ -19,9 +19,9 @@ AIRTABLE_BASE = os.environ.get("AIRTABLE_BASE")
 
 # Numéros WhatsApp des responsables (sans +)
 CONTACTS = {
-    "CHEF_PROJET" : "2250700000001",
-    "PMO"         : "2250700000002",
-    "DIRECTEUR"   : "2250700000003"
+    "CHEF_PROJET" : "2250500277071",
+    "PMO"         : "2250555444241",
+    "DIRECTEUR"   : "2250506574905"
 }
 
 # Matrice d'escalade selon la sévérité

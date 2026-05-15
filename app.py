@@ -31,7 +31,8 @@ ESCALADE = {
     "ELEVE"    : ["CHEF_PROJET", "PMO"],
     "CRITIQUE" : ["CHEF_PROJET", "PMO", "DIRECTEUR"]
 }
-
+# Set pour éviter les doublons
+messages_traites = set()
 # Valeurs exactes des champs Single Select Airtable
 TYPES_RISQUE_VALIDES = [
     "ACCES", "SECURITE", "TECHNIQUE", "ADMINISTRATIF",
@@ -209,8 +210,15 @@ def recevoir_message():
             print("==> INFO : Pas de messages (webhook de statut ignoré)")
             return jsonify({"status": "ok"})
 
-        message    = value["messages"][0]["text"]["body"]
-        expediteur = value["messages"][0]["from"]
+        message_id = value["messages"][0]["id"]
+message    = value["messages"][0]["text"]["body"]
+expediteur = value["messages"][0]["from"]
+
+# Protection anti-doublon
+if message_id in messages_traites:
+    print(f"==> Message {message_id} déjà traité — ignoré")
+    return jsonify({"status": "ok"})
+messages_traites.add(message_id)
         print(f"==> Message : {message}")
         print(f"==> Expéditeur : {expediteur}")
 

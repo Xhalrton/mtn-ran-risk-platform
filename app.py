@@ -10,22 +10,17 @@ from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 
-# ============================================
-# CLÉS API — CHARGÉES DEPUIS RENDER
-# ============================================
-GROQ_KEY      = os.environ.get("GROQ_KEY")
-WA_TOKEN      = os.environ.get("WA_TOKEN")
-WA_PHONE_ID   = os.environ.get("WA_PHONE_ID")
-GOOGLE_CREDS  = os.environ.get("GOOGLE_CREDENTIALS")
+GROQ_KEY     = os.environ.get("GROQ_KEY")
+WA_TOKEN     = os.environ.get("WA_TOKEN")
+WA_PHONE_ID  = os.environ.get("WA_PHONE_ID")
+GOOGLE_CREDS = os.environ.get("GOOGLE_CREDENTIALS")
 
-# Numéros WhatsApp des responsables (sans +)
 CONTACTS = {
     "CHEF_PROJET" : "2250500277071",
     "PMO"         : "2250555444241",
     "DIRECTEUR"   : "2250506574905"
 }
 
-# Matrice d'escalade selon la sévérité
 ESCALADE = {
     "FAIBLE"   : [],
     "MOYEN"    : ["CHEF_PROJET"],
@@ -33,27 +28,16 @@ ESCALADE = {
     "CRITIQUE" : ["CHEF_PROJET", "PMO", "DIRECTEUR"]
 }
 
-# Valeurs exactes des champs
 TYPES_RISQUE_VALIDES = [
     "ACCES", "SECURITE", "TECHNIQUE", "ADMINISTRATIF",
     "METEO", "LOGISTIQUE", "SANITAIRE", "SOCIAL", "AUTRES"
 ]
-SEVERITES_VALIDES = ["CRITIQUE", "ELEVE", "MOYEN", "FAIBLE"]
+SEVERITES_VALIDES  = ["CRITIQUE", "ELEVE", "MOYEN", "FAIBLE"]
+messages_traites   = set()
+groq_client        = Groq(api_key=GROQ_KEY)
 
-# Protection anti-doublon
-messages_traites = set()
-
-# ============================================
-# CLIENT GROQ (LLAMA DE META)
-# ============================================
-groq_client = Groq(api_key=GROQ_KEY)
-
-# ============================================
-# FONCTIONS GOOGLE SHEETS
-# ============================================
 
 def get_sheets_client():
-    """Connexion à Google Sheets via compte de service"""
     creds_dict = json.loads(GOOGLE_CREDS)
     scopes = [
         "https://spreadsheets.google.com/feeds",
@@ -64,9 +48,8 @@ def get_sheets_client():
 
 
 def sauvegarder_sheets(risque, expediteur, message_original):
-    """Sauvegarde le risque dans Google Sheets"""
     try:
-        gc = get_sheets_client()
+        gc    = get_sheets_client()
         sheet = gc.open("MTN_RAN_Risques").sheet1
         ligne = [
             datetime.now().strftime("%d/%m/%Y %H:%M"),
@@ -82,7 +65,7 @@ def sauvegarder_sheets(risque, expediteur, message_original):
             "OPENED"
         ]
         sheet.append_row(ligne)
-        print(f"==> Google Sheets sauvegarde : OK ✅")
+        print("==> Google Sheets sauvegarde : OK")
     except Exception as e:
         import traceback
         print(f"==> Google Sheets erreur : {e}")
@@ -90,25 +73,23 @@ def sauvegarder_sheets(risque, expediteur, message_original):
 
 
 def recuperer_risques_sheets():
-    """Récupère tous les risques depuis Google Sheets"""
     try:
-        gc = get_sheets_client()
+        gc    = get_sheets_client()
         sheet = gc.open("MTN_RAN_Risques").sheet1
         return sheet.get_all_records()
     except Exception as e:
         print(f"==> Google Sheets lecture erreur : {e}")
         return []
 
-# ============================================
-# FONCTIONS PRINCIPALES
-# ============================================
 
 def analyser_risque(message, expediteur):
     projet = "RAN"
     if message.startswith("[FIBRE]") or message.startswith("[FTTH]"):
         projet = "FIBRE"
-    elif message.startswith("[5G]"):      projet = "5G"
-    elif message.startswith("[MMONEY]"):  projet = "MMONEY"
+    elif message.startswith("[5G]"):
+        projet = "5G"
+    elif message.startswith("[MMONEY]"):
+        projet = "MMONEY"
 
     prompt = f"""Tu es un assistant expert en gestion des risques pour MTN Côte d'Ivoire.
 Un technicien terrain vient d'envoyer ce message WhatsApp : "{message}"
@@ -144,25 +125,24 @@ Ne mets rien d'autre que le JSON dans ta réponse."""
 
 
 def envoyer_whatsapp(numero, message):
-    url = f"https://graph.facebook.com/v18.0/{WA_PHONE_ID}/messages"
+    url     = f"https://graph.facebook.com/v18.0/{WA_PHONE_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WA_TOKEN}",
-        "Content-Type": "application/json"
+        "Content-Type" : "application/json"
     }
     data = {
         "messaging_product": "whatsapp",
-        "to": numero,
-        "type": "text",
-        "text": {"body": message}
+        "to"               : numero,
+        "type"             : "text",
+        "text"             : {"body": message}
     }
     resp = requests.post(url, headers=headers, json=data)
-    print(f"==> WhatsApp envoi à {numero} : {resp.status_code} — {resp.text}")
+    print(f"==> WhatsApp envoi à {numero} : {resp.status_code}")
 
 
 def generer_rapport_hebdo():
-    """Génère et envoie le rapport hebdomadaire chaque lundi à 7h"""
     risques = recuperer_risques_sheets()
-    prompt = f"""Tu es un expert en gestion de projet télécoms pour MTN Côte d'Ivoire.
+    prompt  = f"""Tu es un expert en gestion de projet télécoms pour MTN Côte d'Ivoire.
 Voici les risques enregistrés cette semaine :
 {json.dumps(risques, ensure_ascii=False, indent=2)}
 
@@ -185,10 +165,6 @@ Format : texte simple adapté à WhatsApp, sans markdown complexe."""
         envoyer_whatsapp(CONTACTS[role], f"RAPPORT HEBDO MTN RAN\n\n{rapport}")
 
 
-# ============================================
-# ROUTES FLASK
-# ============================================
-
 @app.route("/")
 def home():
     return "MTN RAN Risk Platform is live!", 200
@@ -205,30 +181,26 @@ def verify():
 def recevoir_message():
     print("WEBHOOK APPELE VERSION 5.0")
     data = request.json
-    print(f"=== MESSAGE RECU ===")
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
     try:
         entry = data.get("entry", [])
         if not entry:
-            print("==> ERREUR : Pas d'entry")
             return jsonify({"status": "ok"})
 
         changes = entry[0].get("changes", [])
         if not changes:
-            print("==> ERREUR : Pas de changes")
             return jsonify({"status": "ok"})
 
         value = changes[0].get("value", {})
 
         if "messages" not in value:
-            print("==> INFO : Webhook de statut — ignoré")
+            print("==> Webhook statut ignoré")
             return jsonify({"status": "ok"})
 
-        # Protection anti-doublon
         message_id = value["messages"][0]["id"]
         if message_id in messages_traites:
-            print(f"==> Message {message_id} déjà traité — ignoré")
+            print(f"==> Doublon ignoré : {message_id}")
             return jsonify({"status": "ok"})
         messages_traites.add(message_id)
 
@@ -237,14 +209,11 @@ def recevoir_message():
         print(f"==> Message : {message}")
         print(f"==> Expéditeur : {expediteur}")
 
-        # 1. Accusé de réception
         envoyer_whatsapp(expediteur, "Risque reçu. Analyse en cours... Merci.")
 
-        # 2. Analyse IA
         risque = analyser_risque(message, expediteur)
-        print(f"==> Risque analysé : {risque}")
+        print(f"==> Risque : {risque}")
 
-        # 3. Confirmation au technicien
         confirmation = (
             f"Risque enregistré :\n"
             f"Projet   : {risque.get('projet', 'RAN')}\n"
@@ -255,7 +224,6 @@ def recevoir_message():
         )
         envoyer_whatsapp(expediteur, confirmation)
 
-        # 4. Alertes managers selon matrice d'escalade
         destinataires = ESCALADE.get(risque["severite"], [])
         if destinataires:
             alerte = (
@@ -269,21 +237,17 @@ def recevoir_message():
             for role in destinataires:
                 envoyer_whatsapp(CONTACTS[role], alerte)
 
-        # 5. Sauvegarde Google Sheets
         sauvegarder_sheets(risque, expediteur, message)
         print("=== TRAITEMENT TERMINÉ AVEC SUCCÈS ===")
 
     except Exception as e:
         import traceback
-        print(f"ERREUR COMPLETE : {e}")
+        print(f"ERREUR : {e}")
         print(traceback.format_exc())
 
     return jsonify({"status": "ok"})
 
 
-# ============================================
-# SCHEDULER — RAPPORT AUTOMATIQUE DU LUNDI
-# ============================================
 scheduler = BackgroundScheduler()
 scheduler.add_job(
     generer_rapport_hebdo,
@@ -294,10 +258,6 @@ scheduler.add_job(
 )
 scheduler.start()
 
-
-# ============================================
-# DÉMARRAGE
-# ============================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)

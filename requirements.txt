@@ -2,3 +2,5 @@ flask
 requests
 groq
 apscheduler
+gspread
+google-auth

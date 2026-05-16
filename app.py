@@ -46,10 +46,10 @@ messages_traites = set()
 # ============================================
 # CLIENT GROQ (LLAMA DE META)
 # ============================================
-client = Groq(api_key=GROQ_KEY)
+groq_client = Groq(api_key=GROQ_KEY)
 
 # ============================================
-# FONCTIONS PRINCIPALES
+# FONCTIONS GOOGLE SHEETS
 # ============================================
 
 def get_sheets_client():
@@ -63,9 +63,50 @@ def get_sheets_client():
     return gspread.authorize(creds)
 
 
+def sauvegarder_sheets(risque, expediteur, message_original):
+    """Sauvegarde le risque dans Google Sheets"""
+    try:
+        gc = get_sheets_client()
+        sheet = gc.open("MTN_RAN_Risques").sheet1
+        ligne = [
+            datetime.now().strftime("%d/%m/%Y %H:%M"),
+            expediteur,
+            risque.get("projet", "RAN"),
+            risque["site_concerne"],
+            message_original,
+            risque["type_risque"],
+            risque["severite"],
+            risque["description"],
+            risque["action_immediate"],
+            "OUI" if risque["bloquer_projet"] else "NON",
+            "OPENED"
+        ]
+        sheet.append_row(ligne)
+        print(f"==> Google Sheets sauvegarde : OK ✅")
+    except Exception as e:
+        import traceback
+        print(f"==> Google Sheets erreur : {e}")
+        print(traceback.format_exc())
+
+
+def recuperer_risques_sheets():
+    """Récupère tous les risques depuis Google Sheets"""
+    try:
+        gc = get_sheets_client()
+        sheet = gc.open("MTN_RAN_Risques").sheet1
+        return sheet.get_all_records()
+    except Exception as e:
+        print(f"==> Google Sheets lecture erreur : {e}")
+        return []
+
+# ============================================
+# FONCTIONS PRINCIPALES
+# ============================================
+
 def analyser_risque(message, expediteur):
     projet = "RAN"
-    if message.startswith("[FIBRE]") or message.startswith("[FTTH]"): projet = "FIBRE"
+    if message.startswith("[FIBRE]") or message.startswith("[FTTH]"):
+        projet = "FIBRE"
     elif message.startswith("[5G]"):      projet = "5G"
     elif message.startswith("[MMONEY]"):  projet = "MMONEY"
 
@@ -86,7 +127,7 @@ Analyse ce message et réponds UNIQUEMENT en JSON valide avec cette structure ex
 }}
 Ne mets rien d'autre que le JSON dans ta réponse."""
 
-    response = client.chat.completions.create(
+    response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
@@ -118,41 +159,6 @@ def envoyer_whatsapp(numero, message):
     print(f"==> WhatsApp envoi à {numero} : {resp.status_code} — {resp.text}")
 
 
-def sauvegarder_sheets(risque, expediteur, message_original):
-    """Sauvegarde le risque dans Google Sheets"""
-    try:
-        client_gs = get_sheets_client()
-        sheet = client_gs.open("MTN_RAN_Risques").sheet1
-        ligne = [
-            datetime.now().strftime("%d/%m/%Y %H:%M"),
-            expediteur,
-            risque.get("projet", "RAN"),
-            risque["site_concerne"],
-            message_original,
-            risque["type_risque"],
-            risque["severite"],
-            risque["description"],
-            risque["action_immediate"],
-            "OUI" if risque["bloquer_projet"] else "NON",
-            "OPENED"
-        ]
-        sheet.append_row(ligne)
-        print(f"==> Google Sheets sauvegarde : OK")
-    except Exception as e:
-        print(f"==> Google Sheets erreur : {e}")
-
-
-def recuperer_risques_sheets():
-    """Récupère tous les risques depuis Google Sheets"""
-    try:
-        client_gs = get_sheets_client()
-        sheet = client_gs.open("MTN_RAN_Risques").sheet1
-        return sheet.get_all_records()
-    except Exception as e:
-        print(f"==> Google Sheets lecture erreur : {e}")
-        return []
-
-
 def generer_rapport_hebdo():
     """Génère et envoie le rapport hebdomadaire chaque lundi à 7h"""
     risques = recuperer_risques_sheets()
@@ -169,7 +175,7 @@ Génère un rapport de gouvernance des risques incluant :
 
 Format : texte simple adapté à WhatsApp, sans markdown complexe."""
 
-    response = client.chat.completions.create(
+    response = groq_client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         max_tokens=800
@@ -197,7 +203,7 @@ def verify():
 
 @app.route("/webhook", methods=["POST"])
 def recevoir_message():
-    print("WEBHOOK APPELE VERSION 4.0")
+    print("WEBHOOK APPELE VERSION 5.0")
     data = request.json
     print(f"=== MESSAGE RECU ===")
     print(json.dumps(data, indent=2, ensure_ascii=False))

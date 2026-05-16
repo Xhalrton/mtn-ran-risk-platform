@@ -1,10 +1,12 @@
 import os
 import json
 import requests
+import gspread
 from datetime import datetime
 from flask import Flask, request, jsonify
 from groq import Groq
 from apscheduler.schedulers.background import BackgroundScheduler
+from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
 
@@ -14,8 +16,7 @@ app = Flask(__name__)
 GROQ_KEY      = os.environ.get("GROQ_KEY")
 WA_TOKEN      = os.environ.get("WA_TOKEN")
 WA_PHONE_ID   = os.environ.get("WA_PHONE_ID")
-AIRTABLE_KEY  = os.environ.get("AIRTABLE_KEY")
-AIRTABLE_BASE = os.environ.get("AIRTABLE_BASE")
+GOOGLE_CREDS  = os.environ.get("GOOGLE_CREDENTIALS")
 
 # Numéros WhatsApp des responsables (sans +)
 CONTACTS = {
@@ -32,7 +33,7 @@ ESCALADE = {
     "CRITIQUE" : ["CHEF_PROJET", "PMO", "DIRECTEUR"]
 }
 
-# Valeurs exactes des champs Single Select Airtable
+# Valeurs exactes des champs
 TYPES_RISQUE_VALIDES = [
     "ACCES", "SECURITE", "TECHNIQUE", "ADMINISTRATIF",
     "METEO", "LOGISTIQUE", "SANITAIRE", "SOCIAL", "AUTRES"
@@ -51,9 +52,20 @@ client = Groq(api_key=GROQ_KEY)
 # FONCTIONS PRINCIPALES
 # ============================================
 
+def get_sheets_client():
+    """Connexion à Google Sheets via compte de service"""
+    creds_dict = json.loads(GOOGLE_CREDS)
+    scopes = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    return gspread.authorize(creds)
+
+
 def analyser_risque(message, expediteur):
     projet = "RAN"
-    if message.startswith("[FIBRE]"):     projet = "FIBRE"
+    if message.startswith("[FIBRE]") or message.startswith("[FTTH]"): projet = "FIBRE"
     elif message.startswith("[5G]"):      projet = "5G"
     elif message.startswith("[MMONEY]"):  projet = "MMONEY"
 
@@ -106,40 +118,44 @@ def envoyer_whatsapp(numero, message):
     print(f"==> WhatsApp envoi à {numero} : {resp.status_code} — {resp.text}")
 
 
-def sauvegarder_airtable(risque, expediteur, message_original):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE}/Risques"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {"fields": {
-        "Date"             : datetime.now().isoformat(),
-        "Technicien"       : expediteur,
-        "Projet"           : risque.get("projet", "RAN"),
-        "Site"             : risque["site_concerne"],
-        "Message_original" : message_original,
-        "Type"             : risque["type_risque"],
-        "Severite"         : risque["severite"],
-        "Description"      : risque["description"],
-        "Action"           : risque["action_immediate"],
-        "Bloque"           : risque["bloquer_projet"],
-        "Statut"           : "OPENED"
-    }}
-    resp = requests.post(url, headers=headers, json=data)
-    print(f"==> Airtable sauvegarde : {resp.status_code} — {resp.text}")
+def sauvegarder_sheets(risque, expediteur, message_original):
+    """Sauvegarde le risque dans Google Sheets"""
+    try:
+        client_gs = get_sheets_client()
+        sheet = client_gs.open("MTN_RAN_Risques").sheet1
+        ligne = [
+            datetime.now().strftime("%d/%m/%Y %H:%M"),
+            expediteur,
+            risque.get("projet", "RAN"),
+            risque["site_concerne"],
+            message_original,
+            risque["type_risque"],
+            risque["severite"],
+            risque["description"],
+            risque["action_immediate"],
+            "OUI" if risque["bloquer_projet"] else "NON",
+            "OPENED"
+        ]
+        sheet.append_row(ligne)
+        print(f"==> Google Sheets sauvegarde : OK")
+    except Exception as e:
+        print(f"==> Google Sheets erreur : {e}")
 
 
-def recuperer_risques_airtable(jours=7):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE}/Risques"
-    headers = {"Authorization": f"Bearer {AIRTABLE_KEY}"}
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json().get("records", [])
-    return []
+def recuperer_risques_sheets():
+    """Récupère tous les risques depuis Google Sheets"""
+    try:
+        client_gs = get_sheets_client()
+        sheet = client_gs.open("MTN_RAN_Risques").sheet1
+        return sheet.get_all_records()
+    except Exception as e:
+        print(f"==> Google Sheets lecture erreur : {e}")
+        return []
 
 
 def generer_rapport_hebdo():
-    risques = recuperer_risques_airtable(7)
+    """Génère et envoie le rapport hebdomadaire chaque lundi à 7h"""
+    risques = recuperer_risques_sheets()
     prompt = f"""Tu es un expert en gestion de projet télécoms pour MTN Côte d'Ivoire.
 Voici les risques enregistrés cette semaine :
 {json.dumps(risques, ensure_ascii=False, indent=2)}
@@ -181,7 +197,7 @@ def verify():
 
 @app.route("/webhook", methods=["POST"])
 def recevoir_message():
-    print("WEBHOOK APPELE VERSION 3.0")
+    print("WEBHOOK APPELE VERSION 4.0")
     data = request.json
     print(f"=== MESSAGE RECU ===")
     print(json.dumps(data, indent=2, ensure_ascii=False))
@@ -233,7 +249,7 @@ def recevoir_message():
         )
         envoyer_whatsapp(expediteur, confirmation)
 
-        # 4. Alertes managers
+        # 4. Alertes managers selon matrice d'escalade
         destinataires = ESCALADE.get(risque["severite"], [])
         if destinataires:
             alerte = (
@@ -247,8 +263,8 @@ def recevoir_message():
             for role in destinataires:
                 envoyer_whatsapp(CONTACTS[role], alerte)
 
-        # 5. Sauvegarde Airtable
-        sauvegarder_airtable(risque, expediteur, message)
+        # 5. Sauvegarde Google Sheets
+        sauvegarder_sheets(risque, expediteur, message)
         print("=== TRAITEMENT TERMINÉ AVEC SUCCÈS ===")
 
     except Exception as e:

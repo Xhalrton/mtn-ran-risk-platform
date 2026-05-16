@@ -31,15 +31,16 @@ ESCALADE = {
     "ELEVE"    : ["CHEF_PROJET", "PMO"],
     "CRITIQUE" : ["CHEF_PROJET", "PMO", "DIRECTEUR"]
 }
-# Set pour éviter les doublons
-messages_traites = set()
+
 # Valeurs exactes des champs Single Select Airtable
 TYPES_RISQUE_VALIDES = [
     "ACCES", "SECURITE", "TECHNIQUE", "ADMINISTRATIF",
     "METEO", "LOGISTIQUE", "SANITAIRE", "SOCIAL", "AUTRES"
 ]
-
 SEVERITES_VALIDES = ["CRITIQUE", "ELEVE", "MOYEN", "FAIBLE"]
+
+# Protection anti-doublon
+messages_traites = set()
 
 # ============================================
 # CLIENT GROQ (LLAMA DE META)
@@ -81,7 +82,6 @@ Ne mets rien d'autre que le JSON dans ta réponse."""
     )
     risque = json.loads(response.choices[0].message.content)
 
-    # Sécurité — forcer des valeurs valides si l'IA répond hors liste
     if risque.get("type_risque") not in TYPES_RISQUE_VALIDES:
         risque["type_risque"] = "AUTRES"
     if risque.get("severite") not in SEVERITES_VALIDES:
@@ -118,15 +118,12 @@ def sauvegarder_airtable(risque, expediteur, message_original):
         "Projet"           : risque.get("projet", "RAN"),
         "Site"             : risque["site_concerne"],
         "Message_original" : message_original,
-        "Type"             : risque["type_risque"],       # ACCES|SECURITE|TECHNIQUE|
-                                                           # ADMINISTRATIF|METEO|
-                                                           # LOGISTIQUE|SANITAIRE|
-                                                           # SOCIAL|AUTRES
-        "Severite"         : risque["severite"],          # CRITIQUE|ELEVE|MOYEN|FAIBLE
+        "Type"             : risque["type_risque"],
+        "Severite"         : risque["severite"],
         "Description"      : risque["description"],
         "Action"           : risque["action_immediate"],
         "Bloque"           : risque["bloquer_projet"],
-        "Statut"           : "OPENED"                     # OPENED|ONGOING|CLOSED
+        "Statut"           : "OPENED"
     }}
     resp = requests.post(url, headers=headers, json=data)
     print(f"==> Airtable sauvegarde : {resp.status_code} — {resp.text}")
@@ -184,41 +181,37 @@ def verify():
 
 @app.route("/webhook", methods=["POST"])
 def recevoir_message():
-    print("WEBHOOK APPELE VERSION 2.0")
+    print("WEBHOOK APPELE VERSION 3.0")
     data = request.json
     print(f"=== MESSAGE RECU ===")
     print(json.dumps(data, indent=2, ensure_ascii=False))
+
     try:
         entry = data.get("entry", [])
-        print(f"==> Entry trouvé : {len(entry)} élément(s)")
-
         if not entry:
-            print("==> ERREUR : Pas d'entry dans le message")
+            print("==> ERREUR : Pas d'entry")
             return jsonify({"status": "ok"})
 
         changes = entry[0].get("changes", [])
-        print(f"==> Changes trouvés : {len(changes)} élément(s)")
-
         if not changes:
             print("==> ERREUR : Pas de changes")
             return jsonify({"status": "ok"})
 
         value = changes[0].get("value", {})
-        print(f"==> Value reçue : {value}")
 
         if "messages" not in value:
-            print("==> INFO : Pas de messages (webhook de statut ignoré)")
+            print("==> INFO : Webhook de statut — ignoré")
             return jsonify({"status": "ok"})
 
+        # Protection anti-doublon
         message_id = value["messages"][0]["id"]
-message    = value["messages"][0]["text"]["body"]
-expediteur = value["messages"][0]["from"]
+        if message_id in messages_traites:
+            print(f"==> Message {message_id} déjà traité — ignoré")
+            return jsonify({"status": "ok"})
+        messages_traites.add(message_id)
 
-# Protection anti-doublon
-if message_id in messages_traites:
-    print(f"==> Message {message_id} déjà traité — ignoré")
-    return jsonify({"status": "ok"})
-messages_traites.add(message_id)
+        message    = value["messages"][0]["text"]["body"]
+        expediteur = value["messages"][0]["from"]
         print(f"==> Message : {message}")
         print(f"==> Expéditeur : {expediteur}")
 

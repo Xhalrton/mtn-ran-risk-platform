@@ -32,9 +32,11 @@ TYPES_RISQUE_VALIDES = [
     "ACCES", "SECURITE", "TECHNIQUE", "ADMINISTRATIF",
     "METEO", "LOGISTIQUE", "SANITAIRE", "SOCIAL", "AUTRES"
 ]
-SEVERITES_VALIDES  = ["CRITIQUE", "ELEVE", "MOYEN", "FAIBLE"]
-messages_traites   = set()
-groq_client        = Groq(api_key=GROQ_KEY)
+SEVERITES_VALIDES = ["CRITIQUE", "ELEVE", "MOYEN", "FAIBLE"]
+messages_traites  = set()
+groq_client       = Groq(api_key=GROQ_KEY)
+
+LIEN_DASHBOARD = "https://datastudio.google.com/reporting/2edfa803-9950-4350-990a-5a891e438d11"
 
 
 def get_sheets_client():
@@ -162,7 +164,10 @@ Format : texte simple adapté à WhatsApp, sans markdown complexe."""
     )
     rapport = response.choices[0].message.content
     for role in ["CHEF_PROJET", "PMO", "DIRECTEUR"]:
-        envoyer_whatsapp(CONTACTS[role], f"RAPPORT HEBDO MTN RAN\n\n{rapport}")
+        envoyer_whatsapp(
+            CONTACTS[role],
+            f"RAPPORT HEBDO MTN RAN\n\n{rapport}\n\nDashboard : {LIEN_DASHBOARD}"
+        )
 
 
 @app.route("/")
@@ -179,7 +184,7 @@ def verify():
 
 @app.route("/webhook", methods=["POST"])
 def recevoir_message():
-    print("WEBHOOK APPELE VERSION 5.0")
+    print("WEBHOOK APPELE VERSION 6.0")
     data = request.json
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
@@ -209,21 +214,58 @@ def recevoir_message():
         print(f"==> Message : {message}")
         print(f"==> Expéditeur : {expediteur}")
 
+        # ============================================
+        # COMMANDES SPÉCIALES
+        # ============================================
+        commande = message.strip().upper()
+
+        if commande in ["RAPPORT", "REPORT", "DASHBOARD", "STATS", "TABLEAU"]:
+            envoyer_whatsapp(expediteur,
+                f"Tableau de bord MTN RAN Risk Platform :\n\n"
+                f"{LIEN_DASHBOARD}\n\n"
+                f"Mis à jour en temps réel."
+            )
+            print("==> Lien dashboard envoyé")
+            return jsonify({"status": "ok"})
+
+        if commande in ["AIDE", "HELP", "MENU"]:
+            envoyer_whatsapp(expediteur,
+                "Commandes disponibles :\n\n"
+                "RAPPORT — Recevoir le lien du dashboard\n"
+                "AIDE — Afficher ce menu\n\n"
+                "Pour signaler un risque, envoyez un message naturel en précisant le projet :\n"
+                "[RAN] votre message\n"
+                "[FIBRE] votre message\n"
+                "[5G] votre message\n"
+                "[MMONEY] votre message"
+            )
+            print("==> Menu d'aide envoyé")
+            return jsonify({"status": "ok"})
+
+        # ============================================
+        # TRAITEMENT NORMAL — RISQUE TERRAIN
+        # ============================================
+
+        # 1. Accusé de réception
         envoyer_whatsapp(expediteur, "Risque reçu. Analyse en cours... Merci.")
 
+        # 2. Analyse IA
         risque = analyser_risque(message, expediteur)
         print(f"==> Risque : {risque}")
 
+        # 3. Confirmation au technicien
         confirmation = (
             f"Risque enregistré :\n"
             f"Projet   : {risque.get('projet', 'RAN')}\n"
             f"Type     : {risque['type_risque']}\n"
             f"Sévérité : {risque['severite']}\n"
             f"Site     : {risque['site_concerne']}\n"
-            f"Votre responsable a été alerté."
+            f"Votre responsable a été alerté.\n\n"
+            f"Dashboard : {LIEN_DASHBOARD}"
         )
         envoyer_whatsapp(expediteur, confirmation)
 
+        # 4. Alertes managers selon matrice d'escalade
         destinataires = ESCALADE.get(risque["severite"], [])
         if destinataires:
             alerte = (
@@ -232,11 +274,13 @@ def recevoir_message():
                 f"Signalé  : {expediteur}\n"
                 f"Problème : {risque['description']}\n"
                 f"Action   : {risque['action_immediate']}\n"
-                f"Bloque   : {'OUI' if risque['bloquer_projet'] else 'NON'}"
+                f"Bloque   : {'OUI' if risque['bloquer_projet'] else 'NON'}\n\n"
+                f"Dashboard : {LIEN_DASHBOARD}"
             )
             for role in destinataires:
                 envoyer_whatsapp(CONTACTS[role], alerte)
 
+        # 5. Sauvegarde Google Sheets
         sauvegarder_sheets(risque, expediteur, message)
         print("=== TRAITEMENT TERMINÉ AVEC SUCCÈS ===")
 
